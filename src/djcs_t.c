@@ -25,23 +25,23 @@
 #include "../include/libhcs/djcs_t.h"
 #include "com/util.h"
 
-static void dlog_s(djcs_t_private_key *vk, mpz_t rop, mpz_t op)
+static void dlog_s(djcs_t_public_key *pk, mpz_t rop, mpz_t op)
 {
     mpz_t a, t1, t2, t3, kfact;
     mpz_inits(a, t1, t2, t3, kfact, NULL);
 
     /* Optimization: L(a mod n^(j+1)) = L(a mod n^(s+1)) mod n^j
      * where j <= s */
-    mpz_mod(a, op, vk->n[vk->s]);
+    mpz_mod(a, op, pk->n[pk->s]);
     mpz_sub_ui(a, a, 1);
-    mpz_divexact(a, a, vk->n[0]);
+    mpz_divexact(a, a, pk->n[0]);
 
     /* rop and op can be aliased; store value in a */
     mpz_set_ui(rop, 0);
 
-    for (unsigned long j = 1; j <= vk->s; ++j) {
+    for (unsigned long j = 1; j <= pk->s; ++j) {
         /* t1 = L(a mod n^j+1) */
-        mpz_mod(t1, a, vk->n[j-1]);
+        mpz_mod(t1, a, pk->n[j-1]);
 
         /* t2 = i */
         mpz_set(t2, rop);
@@ -54,16 +54,17 @@ static void dlog_s(djcs_t_private_key *vk, mpz_t rop, mpz_t op)
 
             /* t2 = t2 * i mod n^j */
             mpz_mul(t2, t2, rop);
-            mpz_mod(t2, t2, vk->n[j-1]);
+            mpz_mod(t2, t2, pk->n[j-1]);
 
             /* t1 = t1 - (t2 * n^(k-1)) * k!^(-1)) mod n^j */
-            mpz_invert(t3, kfact, vk->n[j-1]);
+            mpz_invert(t3, kfact, pk->n[j-1]);
             mpz_mul(t3, t3, t2);
-            mpz_mod(t3, t3, vk->n[j-1]);
-            mpz_mul(t3, t3, vk->n[k-2]);
-            mpz_mod(t3, t3, vk->n[j-1]);
+            mpz_mod(t3, t3, pk->n[j-1]);
+            mpz_mul(t3, t3, pk->n[k-2]);
+            mpz_mod(t3, t3, pk->n[j-1]);
             mpz_sub(t1, t1, t3);
-            mpz_mod(t1, t1, vk->n[j-1]);
+
+            mpz_mod(t1, t1, pk->n[j-1]);
         }
 
         mpz_set(rop, t1);
@@ -88,7 +89,11 @@ djcs_t_public_key* djcs_t_init_public_key(void)
     djcs_t_public_key *pk = malloc(sizeof(djcs_t_public_key));
     if (!pk) return NULL;
 
+    pk->w = pk->l = pk->s = 0;
+    pk->n = NULL;
+
     mpz_init(pk->g);
+    mpz_init(pk->delta);
     return pk;
 }
 
@@ -98,6 +103,7 @@ djcs_t_private_key* djcs_t_init_private_key(void)
     if (!vk) return NULL;
 
     vk->w = vk->l = vk->s = 0;
+    vk->n = NULL; vk->vi = NULL;
     mpz_inits(vk->p, vk->ph, vk->q, vk->qh,
              vk->v, vk->nsm, vk->m,
              vk->d, vk->delta, NULL);
@@ -136,6 +142,8 @@ void djcs_t_generate_key_pair(djcs_t_public_key *pk, djcs_t_private_key *vk, hcs
     mpz_init(pk->n[0]);
     mpz_mul(pk->n[0], vk->p, vk->q);
 
+    mpz_init_set(vk->n[0], pk->n[0]);
+
     for (unsigned long i = 1; i <= pk->s; ++i) {
         mpz_init(pk->n[i]);
         mpz_pow_ui(pk->n[i], pk->n[i-1], 2);
@@ -160,6 +168,10 @@ void djcs_t_generate_key_pair(djcs_t_public_key *pk, djcs_t_private_key *vk, hcs
     vk->l = l;
     vk->w = w;
 
+    /* Set l and w in public key -- add by wyc */
+    pk->l = l;
+    pk->w = w;
+
     /* Allocate space for verification values */
     vk->vi = malloc(sizeof(mpz_t) * l);
     for (unsigned long i = 0; i < l; ++i)
@@ -167,6 +179,9 @@ void djcs_t_generate_key_pair(djcs_t_public_key *pk, djcs_t_private_key *vk, hcs
 
     /* Precompute delta = l! */
     mpz_fac_ui(vk->delta, vk->l);
+
+    /* Precompute delta = l! */
+    mpz_fac_ui(pk->delta, pk->l);
 
     /* Compute v being a cyclic generator of squares. This group is
      * always cyclic of order n * p' * q' since n is a safe prime product. */
@@ -283,20 +298,20 @@ void djcs_t_set_auth_server(djcs_t_auth_server *au, mpz_t si, unsigned long i)
     au->i = i + 1; /* Assume 0-index and correct internally. */
 }
 
-void djcs_t_share_decrypt(djcs_t_private_key *vk, djcs_t_auth_server *au,
+void djcs_t_share_decrypt(djcs_t_public_key *pk, djcs_t_auth_server *au,
         mpz_t rop, mpz_t cipher1)
 {
     mpz_t t1;
     mpz_init(t1);
 
-    mpz_mul(t1, au->si, vk->delta);
+    mpz_mul(t1, au->si, pk->delta);
     mpz_mul_ui(t1, t1, 2);
-    mpz_powm(rop, cipher1, t1, vk->n[vk->s]);
+    mpz_powm(rop, cipher1, t1, pk->n[pk->s]);
 
     mpz_clear(t1);
 }
 
-void djcs_t_share_combine(djcs_t_private_key *vk, mpz_t rop, mpz_t *c)
+void djcs_t_share_combine(djcs_t_public_key *pk, mpz_t rop, mpz_t *c)
 {
     mpz_t t1, t2, t3;
     mpz_init(t1);
@@ -305,15 +320,16 @@ void djcs_t_share_combine(djcs_t_private_key *vk, mpz_t rop, mpz_t *c)
 
     /* Could alter loop to choose a random subset instead of always 0-indexing. */
     mpz_set_ui(rop, 1);
-    for (unsigned long i = 0; i < vk->l; ++i) {
+
+    for (unsigned long i = 0; i < pk->l; ++i) {
 
         if (mpz_cmp_ui(c[i], 0) == 0)
             continue; /* This share adds zero to the sum so skip. */
 
         /* Compute lambda_{0,i}^S. This is computed using the values of the
          * shares, not the indices? */
-        mpz_set(t1, vk->delta);
-        for (unsigned long j = 0; j < vk->l; ++j) {
+        mpz_set(t1, pk->delta);
+        for (unsigned long j = 0; j < pk->l; ++j) {
             if ((j == i) || mpz_cmp_ui(c[j], 0) == 0)
                 continue; /* i' in S\i and non-zero */
 
@@ -325,21 +341,22 @@ void djcs_t_share_combine(djcs_t_private_key *vk, mpz_t rop, mpz_t *c)
 
         mpz_abs(t2, t1);
         mpz_mul_ui(t2, t2, 2);
-        mpz_powm(t2, c[i], t2, vk->n[vk->s]);
-        if (mpz_sgn(t1) < 0) mpz_invert(t2, t2, vk->n[vk->s]);
+        mpz_powm(t2, c[i], t2, pk->n[pk->s]);
+        if (mpz_sgn(t1) < 0) mpz_invert(t2, t2, pk->n[pk->s]);
         mpz_mul(rop, rop, t2);
-        mpz_mod(rop, rop, vk->n[vk->s]);
+        mpz_mod(rop, rop, pk->n[pk->s]);
     }
 
     /* We now have c', so use algorithm from Theorem 1 to derive the result */
-    dlog_s(vk, rop, rop);
+    dlog_s(pk, rop, rop);
 
     /* Multiply by (4*delta^2)^-1 mod n^2 to get result */
-    mpz_pow_ui(t1, vk->delta, 2);
+    mpz_pow_ui(t1, pk->delta, 2);
     mpz_mul_ui(t1, t1, 4);
-    assert(mpz_invert(t1, t1, vk->n[vk->s-1])); // assume this inverse exists for now, add a check
+    assert(mpz_invert(t1, t1, pk->n[pk->s-1])); // assume this inverse exists for now, add a check
     mpz_mul(rop, rop, t1);
-    mpz_mod(rop, rop, vk->n[vk->s-1]);
+
+    mpz_mod(rop, rop, pk->n[pk->s-1]);
 
     mpz_clear(t1);
     mpz_clear(t2);
@@ -377,7 +394,7 @@ void djcs_t_clear_private_key(djcs_t_private_key *vk)
 
 void djcs_t_free_public_key(djcs_t_public_key *pk)
 {
-    mpz_clear(pk->g);
+    mpz_clears(pk->g, pk->delta, NULL);
 
     if (pk->n) {
         for (unsigned long i = 0; i <= pk->s; ++i)

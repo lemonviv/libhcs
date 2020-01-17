@@ -37,6 +37,9 @@ typedef struct {
     unsigned long s; /**< Ciphertext space exponent */
     mpz_t *n;        /**< Modulus of the key. n = p * q */
     mpz_t g;         /**< Precomputation: n + 1 usually, may be 2 */
+    unsigned long w; /**< The number of servers req to decrypt -- add by wyc*/
+    unsigned long l; /**< The number of decryption servers -- add by wyc*/
+    mpz_t delta;     /**< Precomputation: l! -- add by wyc */
 } djcs_t_public_key;
 
 /**
@@ -219,12 +222,12 @@ void djcs_t_set_auth_server(djcs_t_auth_server *au, mpz_t si, unsigned long i);
  * combined when sufficient shares have been accumulated using the
  * djcs_t_share_combine function.
  *
- * @param vk A pointer to an initialised djcs_t_private_key
+ * @param pk A pointer to an initialised djcs_t_public_key
  * @param au A pointer to an initialised djcs_t_auth_server
  * @param rop mpz_t where the calculated share is stored
  * @param cipher1 mpz_t which stores the ciphertext to decrypt
  */
-void djcs_t_share_decrypt(djcs_t_private_key *vk, djcs_t_auth_server *au,
+void djcs_t_share_decrypt(djcs_t_public_key *pk, djcs_t_auth_server *au,
                           mpz_t rop, mpz_t cipher1);
 
 /**
@@ -241,11 +244,11 @@ void djcs_t_share_decrypt(djcs_t_private_key *vk, djcs_t_auth_server *au,
  *
  * \pre vk->l <= length(c)
  *
- * @param vk A pointer to an initialised djcs_t_private_key
+ * @param pk A pointer to an initialised djcs_t_public_key
  * @param rop mpz_t where the combined decrypted result is stored
  * @param c array of share values
  */
-void djcs_t_share_combine(djcs_t_private_key *vk, mpz_t rop, mpz_t *c);
+void djcs_t_share_combine(djcs_t_public_key *pk, mpz_t rop, mpz_t *c);
 
 /**
  * Frees a djcs_t_auth_server and all associated memory.
